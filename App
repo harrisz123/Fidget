@@ -1,0 +1,225 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, useSpring, useMotionValue } from 'framer-motion';
+
+const useAudio = (initialVolume = 0.5) => {
+  const audioRef = useRef(null);
+  
+  useEffect(() => {
+    // Create audio context and sources only on first render
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    oscillator.type = 'sine';
+    gainNode.gain.value = 0; // Start silent
+    
+    oscillator.start();
+    
+    audioRef.current = {
+      context: audioContext,
+      oscillator,
+      gainNode
+    };
+    
+    return () => {
+      oscillator.stop();
+      audioContext.close();
+    };
+  }, []);
+  
+  const setVolume = (speed) => {
+    if (audioRef.current) {
+      const volume = Math.min(speed / 100, 1) * initialVolume;
+      const frequency = 200 + (speed * 2);
+      audioRef.current.gainNode.gain.setTargetAtTime(volume, audioRef.current.context.currentTime, 0.01);
+      audioRef.current.oscillator.frequency.setTargetAtTime(frequency, audioRef.current.context.currentTime, 0.01);
+    }
+  };
+  
+  return setVolume;
+};
+
+const StarParticle = ({ angle, speed, type }) => {
+  const getParticleVariants = () => {
+    const baseDistance = 100 + Math.min(speed * 3, 200); // Cap the distance
+    const duration = 1 + Math.random() * 0.5;
+    
+    switch(type) {
+      case 'stardust':
+        return {
+          initial: { scale: 0, opacity: 0, rotate: 0 },
+          animate: {
+            scale: [0, 1, 0],
+            opacity: [0, 0.8, 0],
+            x: [0, Math.cos(angle) * baseDistance * 1.5],
+            y: [0, Math.sin(angle) * baseDistance * 1.5],
+            rotate: [0, 360],
+            transition: {
+              duration: duration * 1.5,
+              ease: "easeOut",
+              times: [0, 0.2, 1]
+            }
+          }
+        };
+      case 'swirl':
+        const spiralX = Array.from({length: 20}, (_, i) => 
+          Math.cos(angle + i/3) * (baseDistance * i/20));
+        const spiralY = Array.from({length: 20}, (_, i) => 
+          Math.sin(angle + i/3) * (baseDistance * i/20));
+        
+        return {
+          initial: { scale: 0, opacity: 0 },
+          animate: {
+            scale: [0, 1, 0],
+            opacity: [0, 0.6, 0],
+            x: spiralX,
+            y: spiralY,
+            transition: {
+              duration: duration * 2,
+              ease: "linear",
+              times: Array.from({length: 20}, (_, i) => i/19)
+            }
+          }
+        };
+      default: // 'sparkle'
+        return {
+          initial: { scale: 0, opacity: 0 },
+          animate: {
+            scale: [0, 1, 0],
+            opacity: [0, 1, 0],
+            x: [0, Math.cos(angle) * baseDistance],
+            y: [0, Math.sin(angle) * baseDistance],
+            transition: {
+              duration,
+              ease: "easeOut",
+              times: [0, 0.2, 1]
+            }
+          }
+        };
+    }
+  };
+
+  const variants = getParticleVariants();
+  const size = type === 'stardust' ? 'w-1 h-1' : type === 'swirl' ? 'w-2 h-2' : 'w-3 h-3';
+  const color = type === 'stardust' ? 'bg-blue-200' : 
+                type === 'swirl' ? 'bg-blue-300' : 'bg-blue-400';
+
+  return (
+    <motion.div
+      className={`absolute ${size} ${color} rounded-full`}
+      variants={variants}
+      initial="initial"
+      animate="animate"
+    />
+  );
+};
+
+const ParticleSystem = ({ isSpinning, speed }) => {
+  const [particles, setParticles] = useState([]);
+  const nextId = useRef(0);
+
+  useEffect(() => {
+    if (isSpinning && speed > 5) {
+      const interval = setInterval(() => {
+        setParticles(current => {
+          const newParticles = [...current];
+          const baseParticleCount = Math.min(Math.floor(speed / 5), 10); // Cap particle count
+          
+          // Add new particles based on speed
+          for (let i = 0; i < baseParticleCount; i++) {
+            if (Math.random() < 0.7) { // 70% chance for normal particles
+              newParticles.push({
+                id: nextId.current++,
+                angle: Math.random() * Math.PI * 2,
+                type: 'sparkle'
+              });
+            } else if (speed > 20 && Math.random() < 0.5) { // 15% chance for swirl at high speeds
+              newParticles.push({
+                id: nextId.current++,
+                angle: (Math.PI * 2 * i) / baseParticleCount,
+                type: 'swirl'
+              });
+            } else { // 15% chance for stardust
+              newParticles.push({
+                id: nextId.current++,
+                angle: Math.random() * Math.PI * 2,
+                type: 'stardust'
+              });
+            }
+          }
+          
+          // Remove old particles
+          return newParticles.slice(-50); // Limit to 50 particles for performance
+        });
+      }, 50);
+
+      return () => clearInterval(interval);
+    } else {
+      setParticles([]); // Clear particles when not spinning
+    }
+  }, [isSpinning, speed]);
+
+  return (
+    <div className="absolute inset-0 pointer-events-none">
+      {particles.map(particle => (
+        <StarParticle
+          key={particle.id}
+          angle={particle.angle}
+          speed={speed}
+          type={particle.type}
+        />
+      ))}
+    </div>
+  );
+};
+
+const FidgetSpinner = () => {
+  const rotate = useMotionValue(0);
+  const [isSpinning, setIsSpinning] = useState(false);
+  const speed = useMotionValue(0);
+  const setVolume = useAudio(0.3); // Initialize audio with 30% max volume
+  
+  const springConfig = {
+    stiffness: 100,
+    damping: 30
+  };
+  
+  const rotateSpring = useSpring(rotate, springConfig);
+  
+  useEffect(() => {
+    const unsubscribe = rotateSpring.onChange((latest) => {
+      // Calculate speed based on rotation change
+      const currentSpeed = Math.abs(rotateSpring.getVelocity() / 100);
+      speed.set(currentSpeed);
+      setVolume(currentSpeed);
+      
+      // Update spinning state
+      setIsSpinning(currentSpeed > 1);
+    });
+    
+    return () => unsubscribe();
+  }, [rotateSpring, speed, setVolume]);
+
+  const handleSpin = () => {
+    const currentRotation = rotate.get();
+    rotate.set(currentRotation + 360 * (5 + Math.random() * 10));
+  };
+
+  return (
+    <div className="relative w-64 h-64 flex items-center justify-center">
+      <motion.div
+        className="w-48 h-48 bg-blue-500 rounded-full shadow-lg cursor-pointer flex items-center justify-center"
+        style={{ rotate: rotateSpring }}
+        onClick={handleSpin}
+      >
+        <div className="w-12 h-12 bg-white rounded-full shadow-inner" />
+      </motion.div>
+      <ParticleSystem isSpinning={isSpinning} speed={speed.get()} />
+    </div>
+  );
+};
+
+export default FidgetSpinner;
